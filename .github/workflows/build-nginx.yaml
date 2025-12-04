@@ -1,0 +1,46 @@
+name: Build Nginx Perf
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-nginx:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up build env
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential git wget ca-certificates \
+            libpcre3-dev zlib1g-dev libxslt1-dev libxml2-dev \
+            libgd-dev libgeoip-dev libperl-dev \
+            libunwind-dev
+
+      - name: Run build script
+        run: |
+          chmod +x ./build-nginx.sh
+          ./build-nginx.sh
+        env:
+          # optional: override versi via env kalau mau
+          NGINX_VERSION: 1.28.0
+
+      - name: Find artifact
+        id: artifact
+        run: |
+          FILE=$(find $HOME -maxdepth 3 -name "nginx-perf-*-linux-amd64.tar.gz" | head -n1)
+          echo "file=${FILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.artifact.outputs.file }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
