@@ -1,9 +1,9 @@
-name: Build Nginx
+name: Build Nginx Release
 
 on:
   push:
-    branches: [ main, master ]
-  pull_request:
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 jobs:
@@ -16,10 +16,11 @@ jobs:
     
     - name: Build Nginx
       run: |
-        chmod +x build-nginx.sh
-        ./build-nginx.sh
+        chmod +x build-nginx-deb.sh
+        ./build-nginx-deb.sh
     
-    - name: Find and move .deb
+    - name: Find .deb file
+      id: find_deb
       run: |
         DEB_FILE=$(find $HOME/nginx-build -name "nginx_*.deb" -type f | head -n 1)
         if [ -z "$DEB_FILE" ]; then
@@ -27,20 +28,72 @@ jobs:
           exit 1
         fi
         cp "$DEB_FILE" ./
-        echo "DEB_FILE=$(basename $DEB_FILE)" >> $GITHUB_ENV
-        ls -lh *.deb
+        DEB_FILENAME=$(basename "$DEB_FILE")
+        echo "deb_file=$DEB_FILENAME" >> $GITHUB_OUTPUT
+        echo "Found: $DEB_FILENAME"
+        ls -lh "$DEB_FILENAME"
     
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: nginx-deb
-        path: "*.deb"
-        retention-days: 30
+    - name: Calculate SHA256
+      id: sha256
+      run: |
+        SHA256=$(sha256sum ${{ steps.find_deb.outputs.deb_file }} | awk '{print $1}')
+        echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+        echo "SHA256: $SHA256"
     
-    - name: Create Release (on tag)
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
       with:
-        files: "*.deb"
+        files: nginx_*.deb
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+        body: |
+          ## 🚀 Nginx High Performance Build
+          
+          **Version:** ${{ github.ref_name }}
+          **Package:** `${{ steps.find_deb.outputs.deb_file }}`
+          **SHA256:** `${{ steps.sha256.outputs.sha256 }}`
+          
+          ### ✨ Features
+          - ✅ Nginx 1.28.0 (stable)
+          - ✅ OpenSSL 3.6.0
+          - ✅ HTTP/3 (QUIC) support
+          - ✅ Brotli compression
+          - ✅ VTS monitoring module
+          - ✅ Headers More module
+          - ✅ Cache Purge module
+          - ✅ Hardened compilation flags
+          
+          ### 📦 Installation
+          
+          **Ubuntu/Debian:**
+          ```
+          # Remove old nginx if exists
+          sudo apt-get remove --purge nginx* -y
+          
+          # Download and install
+          wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.find_deb.outputs.deb_file }}
+          sudo dpkg -i ${{ steps.find_deb.outputs.deb_file }}
+          
+          # Start nginx
+          sudo systemctl start nginx
+          sudo systemctl status nginx
+          ```
+          
+          ### 🔐 Verify Package
+          ```
+          echo "${{ steps.sha256.outputs.sha256 }}  ${{ steps.find_deb.outputs.deb_file }}" | sha256sum -c
+          ```
+          
+          ### 📝 Configuration
+          - Binary: `/usr/sbin/nginx`
+          - Config: `/etc/nginx/nginx.conf`
+          - Logs: `/var/log/nginx/`
+          - Sites: `/etc/nginx/sites-available/` & `/etc/nginx/sites-enabled/`
+          
+          ### 🛠️ Build Info
+          - Built on: Ubuntu Latest (GitHub Actions)
+          - Compiler: GCC with CCache
+          - Hardening: RELRO, Stack Protector, PIE
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
