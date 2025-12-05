@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- Versi default (bisa di-override via ENV) ---
-: "${NGINX_VERSION:=1.28.0}"        # stable [web:124]
+# Versi default (bisa di-override lewat ENV)
+: "${NGINX_VERSION:=1.28.0}"
 : "${OPENSSL_VERSION:=3.6.0}"
 
-# --- Path build & instalasi ---
+# Path build & instalasi
 PREFIX="/usr/local/nginx-perf"
 WORKDIR="${WORKDIR:-$HOME/nginx-build}"
 PKGROOT="${PKGROOT:-$WORKDIR/pkgroot}"
 DOWNLOAD_CACHE="${DOWNLOAD_CACHE:-$WORKDIR/downloads}"
 
-# --- Repo modul eksternal ---
+# Repo modul eksternal
 MOD_BROTLI_REPO="https://github.com/google/ngx_brotli.git"
 MOD_VTS_REPO="https://github.com/vozlt/nginx-module-vts.git"
 MOD_LUA_REPO="https://github.com/openresty/lua-nginx-module.git"
@@ -30,7 +30,6 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   libgd-dev libperl-dev libunwind-dev \
   libluajit-5.1-dev ruby-full ccache
 
-# CCache untuk percepat build ulang
 CC_CMD="gcc"
 if command -v ccache >/dev/null 2>&1; then
   echo "[*] CCache aktif"
@@ -39,15 +38,13 @@ if command -v ccache >/dev/null 2>&1; then
   export CCACHE_COMPRESS=1
 fi
 
-# fpm untuk bikin .deb
 if ! command -v fpm >/dev/null 2>&1; then
   sudo gem install --no-document fpm
 fi
 
-# --- helper download dengan cache ---
 download_src() {
-  local url=$1
-  local file=$2
+  local url="$1"
+  local file="$2"
   if [ ! -f "$DOWNLOAD_CACHE/$file" ]; then
     echo "Downloading $file ..."
     wget -q -O "$DOWNLOAD_CACHE/$file" "$url"
@@ -78,7 +75,7 @@ git clone --depth 1 "$MOD_REDIS2_REPO" redis2-nginx-module
 cd "nginx-${NGINX_VERSION}"
 
 echo "[*] Konfigurasi environment LuaJIT"
-LUAJIT_INC_PATH=$(find /usr/include -maxdepth 1 -type d -name "luajit-2*" | head -n 1 || true)
+LUAJIT_INC_PATH="$(find /usr/include -maxdepth 1 -type d -name 'luajit-2*' | head -n 1 || true)"
 if [ -z "$LUAJIT_INC_PATH" ]; then
   echo "Error: Header LuaJIT tidak ditemukan di /usr/include/luajit-2*"
   exit 1
@@ -89,4 +86,57 @@ export LUAJIT_INC="$LUAJIT_INC_PATH"
 echo "[*] ./configure Nginx ${NGINX_VERSION} + OpenSSL ${OPENSSL_VERSION}"
 ./configure \
   --prefix="${PREFIX}" \
-  --sbin-path="${PREFIX}/sbin/nginx
+  --sbin-path="${PREFIX}/sbin/nginx" \
+  --conf-path="${PREFIX}/conf/nginx.conf" \
+  --pid-path="${PREFIX}/logs/nginx.pid" \
+  --lock-path="${PREFIX}/logs/nginx.lock" \
+  --http-log-path="${PREFIX}/logs/access.log" \
+  --error-log-path="${PREFIX}/logs/error.log" \
+  --with-cc="${CC_CMD}" \
+  --with-pcre-jit \
+  --with-file-aio \
+  --with-threads \
+  --with-http_ssl_module \
+  --with-http_v2_module \
+  --with-http_v3_module \
+  --with-http_gzip_static_module \
+  --with-http_stub_status_module \
+  --with-stream \
+  --with-stream_ssl_module \
+  --with-stream_realip_module \
+  --with-openssl="../openssl-${OPENSSL_VERSION}" \
+  --with-openssl-opt="no-weak-ssl-ciphers enable-ec_nistp_64_gcc_128" \
+  --add-module="../ngx_brotli" \
+  --add-module="../nginx-module-vts" \
+  --add-module="../ngx_devel_kit" \
+  --add-module="../lua-nginx-module" \
+  --add-module="../redis2-nginx-module" \
+  --with-cc-opt="-O2 -g -pipe -Wall -Wp,-D_FORTIFY_SOURCE=2 -fexceptions -fstack-protector-strong --param=ssp-buffer-size=4 -grecord-gcc-switches -m64 -mtune=generic" \
+  --with-ld-opt="-Wl,-z,relro -Wl,-z,now -Wl,--as-needed"
+
+echo "[*] Build Nginx"
+make -j"$(nproc)"
+
+echo "[*] Install ke staging (DESTDIR)"
+rm -rf "$PKGROOT"
+make install DESTDIR="$PKGROOT"
+
+PKG_NAME="nginx-perf"
+PKG_VERSION="${NGINX_VERSION}-openssl${OPENSSL_VERSION}"
+PKG_ARCH="amd64"
+
+echo "[*] Buat paket .deb"
+fpm -s dir -t deb \
+  -n "$PKG_NAME" \
+  -v "$PKG_VERSION" \
+  -a "$PKG_ARCH" \
+  --description "Nginx ${NGINX_VERSION} (PCRE2) + HTTP/3 + OpenSSL ${OPENSSL_VERSION} + Brotli/Lua/VTS/Redis2" \
+  --license "BSD" \
+  --url "https://nginx.org/" \
+  --maintainer "GitHub Action" \
+  --vendor "Custom Build" \
+  --depends "libc6, libpcre2-8-0, zlib1g, libssl-dev, libluajit-5.1-2" \
+  -C "$PKGROOT" \
+  .
+
+echo "[*] Selesai."
