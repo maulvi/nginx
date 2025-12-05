@@ -22,7 +22,7 @@ jobs:
         run: chmod +x ./build-nginx.sh
 
       - name: Build Nginx .deb Package
-        run: ./build-nginx-deb.sh
+        run: ./build-nginx.sh
 
       - name: Locate .deb Artifact
         id: find_deb
