@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -6,7 +5,6 @@ set -euo pipefail
 : "${NGINX_VERSION:=1.28.0}"
 : "${OPENSSL_VERSION:=3.6.0}"
 
-PREFIX="/usr/local/nginx-perf"
 WORKDIR="${WORKDIR:-$HOME/nginx-build}"
 PKGROOT="${PKGROOT:-$WORKDIR/pkgroot}"
 DOWNLOAD_CACHE="${DOWNLOAD_CACHE:-$WORKDIR/downloads}"
@@ -84,13 +82,21 @@ export LUAJIT_INC="$LUAJIT_INC_PATH"
 
 echo "[*] Configure Nginx $NGINX_VERSION + OpenSSL $OPENSSL_VERSION"
 ./configure \
-  --prefix="$PREFIX" \
-  --sbin-path="$PREFIX/sbin/nginx" \
-  --conf-path="$PREFIX/conf/nginx.conf" \
-  --pid-path="$PREFIX/logs/nginx.pid" \
-  --lock-path="$PREFIX/logs/nginx.lock" \
-  --http-log-path="$PREFIX/logs/access.log" \
-  --error-log-path="$PREFIX/logs/error.log" \
+  --prefix=/etc/nginx \
+  --sbin-path=/usr/sbin/nginx \
+  --modules-path=/usr/lib/nginx/modules \
+  --conf-path=/etc/nginx/nginx.conf \
+  --error-log-path=/var/log/nginx/error.log \
+  --http-log-path=/var/log/nginx/access.log \
+  --pid-path=/run/nginx.pid \
+  --lock-path=/run/nginx.lock \
+  --http-client-body-temp-path=/var/cache/nginx/client_temp \
+  --http-proxy-temp-path=/var/cache/nginx/proxy_temp \
+  --http-fastcgi-temp-path=/var/cache/nginx/fastcgi_temp \
+  --http-uwsgi-temp-path=/var/cache/nginx/uwsgi_temp \
+  --http-scgi-temp-path=/var/cache/nginx/scgi_temp \
+  --user=www-data \
+  --group=www-data \
   --with-cc="$CC_CMD" \
   --with-pcre-jit \
   --with-file-aio \
@@ -136,7 +142,65 @@ echo "[*] Install to staging"
 rm -rf "$PKGROOT"
 make install DESTDIR="$PKGROOT"
 
-PKG_NAME=nginx-perf
+echo "[*] Create additional directories"
+mkdir -p "$PKGROOT/etc/nginx/sites-available"
+mkdir -p "$PKGROOT/etc/nginx/sites-enabled"
+mkdir -p "$PKGROOT/etc/nginx/conf.d"
+mkdir -p "$PKGROOT/var/log/nginx"
+mkdir -p "$PKGROOT/var/cache/nginx/client_temp"
+mkdir -p "$PKGROOT/var/cache/nginx/proxy_temp"
+mkdir -p "$PKGROOT/var/cache/nginx/fastcgi_temp"
+mkdir -p "$PKGROOT/var/cache/nginx/uwsgi_temp"
+mkdir -p "$PKGROOT/var/cache/nginx/scgi_temp"
+mkdir -p "$PKGROOT/var/lib/nginx"
+
+echo "[*] Create systemd service file"
+mkdir -p "$PKGROOT/lib/systemd/system"
+cat > "$PKGROOT/lib/systemd/system/nginx.service" <<'EOF'
+[Unit]
+Description=Nginx HTTP/3 High Performance Web Server
+Documentation=https://nginx.org/en/docs/
+After=network-online.target remote-fs.target nss-lookup.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+PIDFile=/run/nginx.pid
+ExecStartPre=/usr/sbin/nginx -t -q -g 'daemon on; master_process on;'
+ExecStart=/usr/sbin/nginx -g 'daemon on; master_process on;'
+ExecReload=/bin/sh -c "/bin/kill -s HUP $(/bin/cat /run/nginx.pid)"
+ExecStop=/bin/sh -c "/bin/kill -s TERM $(/bin/cat /run/nginx.pid)"
+PrivateTmp=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "[*] Create logrotate config"
+mkdir -p "$PKGROOT/etc/logrotate.d"
+cat > "$PKGROOT/etc/logrotate.d/nginx" <<'EOF'
+/var/log/nginx/*.log {
+    daily
+    missingok
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    create 0640 www-data adm
+    sharedscripts
+    prerotate
+        if [ -d /etc/logrotate.d/httpd-prerotate ]; then \
+            run-parts /etc/logrotate.d/httpd-prerotate; \
+        fi
+    endscript
+    postrotate
+        invoke-rc.d nginx rotate >/dev/null 2>&1 || true
+    endscript
+}
+EOF
+
+PKG_NAME=nginx
 PKG_VERSION="${NGINX_VERSION}-openssl${OPENSSL_VERSION}"
 PKG_ARCH=amd64
 
@@ -145,12 +209,36 @@ fpm -s dir -t deb \
   -n "$PKG_NAME" \
   -v "$PKG_VERSION" \
   -a "$PKG_ARCH" \
-  --description "Nginx $NGINX_VERSION (PCRE2) + HTTP/3 + OpenSSL $OPENSSL_VERSION + Brotli/Lua/VTS/Redis2 + Hardened" \
+  --description "Nginx $NGINX_VERSION + HTTP/3 + OpenSSL $OPENSSL_VERSION + Brotli/Lua/VTS/Redis2" \
   --license "BSD" \
   --url "https://nginx.org/" \
   --maintainer "GitHub Action" \
   --vendor "Custom Build" \
   --depends "libc6, libpcre2-8-0, zlib1g, libssl-dev, libluajit-5.1-2" \
+  --conflicts "nginx, nginx-common, nginx-core, nginx-full, nginx-light, nginx-extras" \
+  --provides "nginx" \
+  --replaces "nginx, nginx-common, nginx-core" \
+  --config-files "/etc/nginx/nginx.conf" \
+  --config-files "/etc/logrotate.d/nginx" \
+  --directories "/etc/nginx" \
+  --directories "/var/log/nginx" \
+  --directories "/var/cache/nginx" \
+  --directories "/var/lib/nginx" \
+  --after-install <(cat <<'AFTER_INSTALL'
+#!/bin/sh
+set -e
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ]; then
+    if ! getent passwd www-data >/dev/null; then
+        adduser --system --group --home /var/www --no-create-home --disabled-login www-data >/dev/null
+    fi
+    chown -R www-data:www-data /var/log/nginx /var/cache/nginx /var/lib/nginx 2>/dev/null || true
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if [ -x /usr/sbin/nginx ]; then
+        systemctl enable nginx.service >/dev/null 2>&1 || true
+    fi
+fi
+AFTER_INSTALL
+) \
   -C "$PKGROOT" .
 
 echo "[*] Done."
