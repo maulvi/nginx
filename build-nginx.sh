@@ -31,7 +31,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   libgd-dev libperl-dev libunwind-dev \
   libluajit-5.1-dev ruby-full ccache
 
-# Deteksi ccache untuk mempercepat build ulang
+# Deteksi ccache
 CC_CMD="gcc"
 if command -v ccache >/dev/null 2>&1; then
   echo "[*] CCache aktif."
@@ -45,7 +45,7 @@ if ! command -v fpm >/dev/null 2>&1; then
   sudo gem install --no-document fpm
 fi
 
-# --- Fungsi Download dengan Cache ---
+# --- Fungsi Download Cache ---
 download_src() {
   local url=$1
   local file=$2
@@ -55,7 +55,6 @@ download_src() {
   else
     echo "Menggunakan cache: $file"
   fi
-  # Ekstrak ke workdir
   tar xf "$DOWNLOAD_CACHE/$file" -C "$WORKDIR"
 }
 
@@ -69,18 +68,20 @@ if [ ! -d "openssl-${OPENSSL_VERSION}" ]; then
 fi
 
 echo "[*] Clone Modul (Shallow Clone)"
-# Gunakan --depth 1 agar lebih cepat
-[ -d ngx_brotli ] || git clone --depth 1 --recursive "$MOD_BROTLI_REPO" ngx_brotli
-[ -d nginx-module-vts ] || git clone --depth 1 "$MOD_VTS_REPO" nginx-module-vts
-[ -d ngx_devel_kit ] || git clone --depth 1 "$MOD_NDK_REPO" ngx_devel_kit
-[ -d lua-nginx-module ] || git clone --depth 1 "$MOD_LUA_REPO" lua-nginx-module
-[ -d redis2-nginx-module ] || git clone --depth 1 "$MOD_REDIS2_REPO" redis2-nginx-module
-[ -d ngx_http_tls_dyn_size ] || git clone --depth 1 "$MOD_TLS_DYN_REPO" ngx_http_tls_dyn_size
+# Hapus folder lama untuk memastikan clone bersih
+rm -rf ngx_brotli nginx-module-vts ngx_devel_kit lua-nginx-module redis2-nginx-module ngx_http_tls_dyn_size
+
+git clone --depth 1 --recursive "$MOD_BROTLI_REPO" ngx_brotli
+git clone --depth 1 "$MOD_VTS_REPO" nginx-module-vts
+git clone --depth 1 "$MOD_NDK_REPO" ngx_devel_kit
+git clone --depth 1 "$MOD_LUA_REPO" lua-nginx-module
+git clone --depth 1 "$MOD_REDIS2_REPO" redis2-nginx-module
+git clone --depth 1 "$MOD_TLS_DYN_REPO" ngx_http_tls_dyn_size
 
 cd "nginx-${NGINX_VERSION}"
 
 echo "[*] Konfigurasi Environment LuaJIT"
-# FIX: Cari path include LuaJIT 2.0/2.1 secara otomatis
+# Auto-detect path include LuaJIT 2.0/2.1 di Debian/Ubuntu
 LUAJIT_INC_PATH=$(find /usr/include -maxdepth 1 -type d -name "luajit-2*" | head -n 1)
 
 if [ -z "$LUAJIT_INC_PATH" ]; then
@@ -90,8 +91,6 @@ fi
 
 export LUAJIT_LIB="/usr/lib/x86_64-linux-gnu"
 export LUAJIT_INC="$LUAJIT_INC_PATH"
-
-echo "LuaJIT Detected -> INC: $LUAJIT_INC | LIB: $LUAJIT_LIB"
 
 echo "[*] Configure Nginx"
 ./configure \
