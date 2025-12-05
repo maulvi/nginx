@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # --- Versi (bisa dioverride via ENV) ---
-: "${NGINX_VERSION:=1.29.2}"     # disarankan sama dengan versi di patch
+: "${NGINX_VERSION:=1.29.2}"       # cocok dengan patch 1.29.2+
 : "${OPENSSL_VERSION:=3.6.0}"
 
 # --- Path build & instalasi ---
@@ -20,7 +20,7 @@ MOD_REDIS2_REPO="https://github.com/openresty/redis2-nginx-module.git"
 
 # Patch Dynamic TLS Records (Cloudflare) untuk nginx 1.29.2+
 TLS_DYN_PATCH_URL="https://github.com/nginx-modules/ngx_http_tls_dyn_size/raw/refs/heads/master/nginx__dynamic_tls_records_1.29.2+.patch"
-TLS_DYN_PATCH_FILE="${DOWNLOAD_CACHE}/dynamic_tls_records_1.29.2+.patch"
+TLS_DYN_PATCH_FILE="${DOWNLOAD_CACHE}/nginx__dynamic_tls_records_1.29.2+.patch"
 
 echo "[*] Setup direktori: $WORKDIR"
 mkdir -p "$WORKDIR" "$DOWNLOAD_CACHE"
@@ -89,7 +89,6 @@ git clone --depth 1 "$MOD_REDIS2_REPO" redis2-nginx-module
 cd "nginx-${NGINX_VERSION}"
 
 echo "[*] Apply patch Dynamic TLS Records (Cloudflare)"
-# Patch ini memodifikasi core TLS Nginx untuk dynamic record size
 patch -p1 < "$TLS_DYN_PATCH_FILE"
 
 echo "[*] Konfigurasi environment LuaJIT"
@@ -157,4 +156,4 @@ fpm -s dir -t deb \
   -C "$PKGROOT" \
   .
 
-echo "[*] Selesai. Paket .deb ada di: $WORKDIR"
+echo "[*] Selesai."
