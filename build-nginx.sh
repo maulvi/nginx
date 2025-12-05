@@ -1,28 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Versi default (bisa di-override via ENV)
+# Versi default (bisa dioverride via ENV)
 : "${NGINX_VERSION:=1.28.0}"
 : "${OPENSSL_VERSION:=3.6.0}"
 
-# Path build & instalasi
 PREFIX="/usr/local/nginx-perf"
 WORKDIR="${WORKDIR:-$HOME/nginx-build}"
 PKGROOT="${PKGROOT:-$WORKDIR/pkgroot}"
 DOWNLOAD_CACHE="${DOWNLOAD_CACHE:-$WORKDIR/downloads}"
 
-# Repo modul eksternal
-MOD_BROTLI_REPO="https://github.com/google/ngx_brotli.git"
-MOD_VTS_REPO="https://github.com/vozlt/nginx-module-vts.git"
-MOD_LUA_REPO="https://github.com/openresty/lua-nginx-module.git"
-MOD_NDK_REPO="https://github.com/vision5/ngx_devel_kit.git"
-MOD_REDIS2_REPO="https://github.com/openresty/redis2-nginx-module.git"
+MOD_BROTLI_REPO=https://github.com/google/ngx_brotli.git
+MOD_VTS_REPO=https://github.com/vozlt/nginx-module-vts.git
+MOD_LUA_REPO=https://github.com/openresty/lua-nginx-module.git
+MOD_NDK_REPO=https://github.com/vision5/ngx_devel_kit.git
+MOD_REDIS2_REPO=https://github.com/openresty/redis2-nginx-module.git
 
-echo "[*] Setup direktori: $WORKDIR"
+echo "[*] Setup dir: $WORKDIR"
 mkdir -p "$WORKDIR" "$DOWNLOAD_CACHE"
 cd "$WORKDIR"
 
-echo "[*] Install dependencies build & packaging"
+echo "[*] Install deps"
 sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   build-essential git wget ca-certificates \
@@ -30,23 +28,21 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   libgd-dev libperl-dev libunwind-dev \
   libluajit-5.1-dev ruby-full ccache
 
-# Gunakan ccache bila tersedia
-CC_CMD="gcc"
+CC_CMD=gcc
 if command -v ccache >/dev/null 2>&1; then
-  echo "[*] CCache aktif"
+  echo "[*] CCache on"
   CC_CMD="ccache gcc"
   export CCACHE_DIR="$HOME/.ccache"
   export CCACHE_COMPRESS=1
 fi
 
-# fpm untuk build .deb
 if ! command -v fpm >/dev/null 2>&1; then
   sudo gem install --no-document fpm
 fi
 
 download_src() {
-  local url="$1"
-  local file="$2"
+  url=$1
+  file=$2
   if [ ! -f "$DOWNLOAD_CACHE/$file" ]; then
     echo "Downloading $file ..."
     wget -q -O "$DOWNLOAD_CACHE/$file" "$url"
@@ -56,4 +52,88 @@ download_src() {
   tar xf "$DOWNLOAD_CACHE/$file" -C "$WORKDIR"
 }
 
-echo "[*] Download source Nginx & Open
+echo "[*] Download Nginx & OpenSSL"
+if [ ! -d "nginx-$NGINX_VERSION" ]; then
+  download_src "https://nginx.org/download/nginx-$NGINX_VERSION.tar.gz" "nginx-$NGINX_VERSION.tar.gz"
+fi
+
+if [ ! -d "openssl-$OPENSSL_VERSION" ]; then
+  download_src "https://www.openssl.org/source/openssl-$OPENSSL_VERSION.tar.gz" "openssl-$OPENSSL_VERSION.tar.gz"
+fi
+
+echo "[*] Clone modules"
+rm -rf ngx_brotli nginx-module-vts ngx_devel_kit lua-nginx-module redis2-nginx-module
+
+git clone --depth 1 --recursive "$MOD_BROTLI_REPO" ngx_brotli
+git clone --depth 1 "$MOD_VTS_REPO" nginx-module-vts
+git clone --depth 1 "$MOD_NDK_REPO" ngx_devel_kit
+git clone --depth 1 "$MOD_LUA_REPO" lua-nginx-module
+git clone --depth 1 "$MOD_REDIS2_REPO" redis2-nginx-module
+
+cd "nginx-$NGINX_VERSION"
+
+echo "[*] Setup LuaJIT env"
+LUAJIT_INC_PATH=$(find /usr/include -maxdepth 1 -type d -name luajit-2\* | head -n 1 || true)
+if [ -z "$LUAJIT_INC_PATH" ]; then
+  echo "Error: LuaJIT headers not found"
+  exit 1
+fi
+export LUAJIT_LIB=/usr/lib/x86_64-linux-gnu
+export LUAJIT_INC="$LUAJIT_INC_PATH"
+
+echo "[*] Configure Nginx $NGINX_VERSION + OpenSSL $OPENSSL_VERSION"
+./configure \
+  --prefix="$PREFIX" \
+  --sbin-path="$PREFIX/sbin/nginx" \
+  --conf-path="$PREFIX/conf/nginx.conf" \
+  --pid-path="$PREFIX/logs/nginx.pid" \
+  --lock-path="$PREFIX/logs/nginx.lock" \
+  --http-log-path="$PREFIX/logs/access.log" \
+  --error-log-path="$PREFIX/logs/error.log" \
+  --with-cc="$CC_CMD" \
+  --with-pcre-jit \
+  --with-file-aio \
+  --with-threads \
+  --with-http_ssl_module \
+  --with-http_v2_module \
+  --with-http_v3_module \
+  --with-http_gzip_static_module \
+  --with-http_stub_status_module \
+  --with-stream \
+  --with-stream_ssl_module \
+  --with-stream_realip_module \
+  --with-openssl="../openssl-$OPENSSL_VERSION" \
+  --with-openssl-opt="no-weak-ssl-ciphers enable-ec_nistp_64_gcc_128" \
+  --add-module="../ngx_brotli" \
+  --add-module="../nginx-module-vts" \
+  --add-module="../ngx_devel_kit" \
+  --add-module="../lua-nginx-module" \
+  --add-module="../redis2-nginx-module" \
+  --with-cc-opt="-O2 -pipe" \
+  --with-ld-opt="-Wl,--as-needed"
+
+echo "[*] Build"
+make -j"$(nproc)"
+
+echo "[*] Install to staging"
+rm -rf "$PKGROOT"
+make install DESTDIR="$PKGROOT"
+
+PKG_NAME=nginx-perf
+PKG_VERSION="${NGINX_VERSION}-openssl${OPENSSL_VERSION}"
+PKG_ARCH=amd64
+
+echo "[*] Build .deb"
+fpm -s dir -t deb \
+  -n "$PKG_NAME" \
+  -v "$PKG_VERSION" \
+  -a "$PKG_ARCH" \
+  --description "Nginx $NGINX_VERSION (PCRE2) + HTTP/3 + OpenSSL $OPENSSL_VERSION + Brotli/Lua/VTS/Redis2" \
+  --license "BSD" \
+  --url "https://nginx.org/" \
+  --maintainer "GitHub Action" \
+  --vendor "Custom Build" \
+  --depends "libc6, libpcre2-8-0, zlib1g, libssl-dev, libluajit-5.1-2" \
+  -C "$PKGROOT" .
+
+echo "[*] Done."
