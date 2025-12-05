@@ -1,48 +1,46 @@
-name: Build Nginx Perf .deb
+name: Build Nginx
 
 on:
   push:
-    tags:
-      - "v*"  # Trigger saat push tag, misal: v1.0.0
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
 
 jobs:
-  build-deb:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write  # Penting: Izin untuk upload ke Release
-    env:
-      NGINX_VERSION: 1.28.0
-      OPENSSL_VERSION: 3.6.0
-
+    
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Make Build Script Executable
-        run: chmod +x ./build-nginx.sh
-
-      - name: Build Nginx .deb Package
-        run: ./build-nginx.sh
-
-      - name: Locate .deb Artifact
-        id: find_deb
-        run: |
-          # Cari file .deb yang baru dibuat
-          FILE=$(find $HOME -maxdepth 5 -name "nginx-perf_*.deb" | head -n1)
-          if [ -z "$FILE" ]; then
-            echo "Error: No .deb file found!" >&2
-            exit 1
-          fi
-          echo "Found package: $FILE"
-          echo "file=${FILE}" >> "$GITHUB_OUTPUT"
-
-      - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: ${{ steps.find_deb.outputs.file }}
-          draft: false
-          prerelease: false
-          # generate_release_notes: true  # Opsional: Auto-generate notes
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Build Nginx
+      run: |
+        chmod +x build-nginx.sh
+        ./build-nginx.sh
+    
+    - name: Find and move .deb
+      run: |
+        DEB_FILE=$(find $HOME/nginx-build -name "nginx_*.deb" -type f | head -n 1)
+        if [ -z "$DEB_FILE" ]; then
+          echo "Error: No .deb file found!"
+          exit 1
+        fi
+        cp "$DEB_FILE" ./
+        echo "DEB_FILE=$(basename $DEB_FILE)" >> $GITHUB_ENV
+        ls -lh *.deb
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: nginx-deb
+        path: "*.deb"
+        retention-days: 30
+    
+    - name: Create Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: "*.deb"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
