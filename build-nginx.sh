@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- Versi (bisa dioverride via ENV) ---
-: "${NGINX_VERSION:=1.29.2}"       # cocok dengan patch 1.29.2+
+# --- Versi default (bisa di-override via ENV) ---
+: "${NGINX_VERSION:=1.28.0}"        # stable branch [web:124]
 : "${OPENSSL_VERSION:=3.6.0}"
 
 # --- Path build & instalasi ---
@@ -18,10 +18,6 @@ MOD_LUA_REPO="https://github.com/openresty/lua-nginx-module.git"
 MOD_NDK_REPO="https://github.com/vision5/ngx_devel_kit.git"
 MOD_REDIS2_REPO="https://github.com/openresty/redis2-nginx-module.git"
 
-# Patch Dynamic TLS Records (Cloudflare) untuk nginx 1.29.2+
-TLS_DYN_PATCH_URL="https://github.com/nginx-modules/ngx_http_tls_dyn_size/raw/refs/heads/master/nginx__dynamic_tls_records_1.29.2+.patch"
-TLS_DYN_PATCH_FILE="${DOWNLOAD_CACHE}/nginx__dynamic_tls_records_1.29.2+.patch"
-
 echo "[*] Setup direktori: $WORKDIR"
 mkdir -p "$WORKDIR" "$DOWNLOAD_CACHE"
 cd "$WORKDIR"
@@ -32,7 +28,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   build-essential git wget ca-certificates \
   libpcre2-dev zlib1g-dev libxslt1-dev libxml2-dev \
   libgd-dev libperl-dev libunwind-dev \
-  libluajit-5.1-dev ruby-full ccache patch
+  libluajit-5.1-dev ruby-full ccache
 
 # CCache untuk percepat build ulang
 CC_CMD="gcc"
@@ -70,13 +66,6 @@ if [ ! -d "openssl-${OPENSSL_VERSION}" ]; then
   download_src "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz" "openssl-${OPENSSL_VERSION}.tar.gz"
 fi
 
-echo "[*] Download patch Dynamic TLS Records"
-if [ ! -f "$TLS_DYN_PATCH_FILE" ]; then
-  wget -q -O "$TLS_DYN_PATCH_FILE" "$TLS_DYN_PATCH_URL"
-else
-  echo "Using cached dynamic TLS patch"
-fi
-
 echo "[*] Clone modul eksternal (shallow)"
 rm -rf ngx_brotli nginx-module-vts ngx_devel_kit lua-nginx-module redis2-nginx-module
 
@@ -87,9 +76,6 @@ git clone --depth 1 "$MOD_LUA_REPO" lua-nginx-module
 git clone --depth 1 "$MOD_REDIS2_REPO" redis2-nginx-module
 
 cd "nginx-${NGINX_VERSION}"
-
-echo "[*] Apply patch Dynamic TLS Records (Cloudflare)"
-patch -p1 < "$TLS_DYN_PATCH_FILE"
 
 echo "[*] Konfigurasi environment LuaJIT"
 LUAJIT_INC_PATH=$(find /usr/include -maxdepth 1 -type d -name "luajit-2*" | head -n 1 || true)
@@ -115,7 +101,7 @@ echo "[*] ./configure Nginx ${NGINX_VERSION} + OpenSSL ${OPENSSL_VERSION}"
   --with-threads \
   --with-http_ssl_module \
   --with-http_v2_module \
-  --with-http_v3_module \
+  --with-http_v3_module \  # HTTP/3 resmi Nginx [web:108]
   --with-http_gzip_static_module \
   --with-http_stub_status_module \
   --with-stream \
@@ -147,7 +133,7 @@ fpm -s dir -t deb \
   -n "$PKG_NAME" \
   -v "$PKG_VERSION" \
   -a "$PKG_ARCH" \
-  --description "Nginx ${NGINX_VERSION} (PCRE2) + HTTP/3 + OpenSSL ${OPENSSL_VERSION} + Brotli/Lua/VTS/Redis2 + Dynamic TLS Records patch" \
+  --description "Nginx ${NGINX_VERSION} (PCRE2) + HTTP/3 + OpenSSL ${OPENSSL_VERSION} + Brotli/Lua/VTS/Redis2" \
   --license "BSD" \
   --url "https://nginx.org/" \
   --maintainer "GitHub Action" \
